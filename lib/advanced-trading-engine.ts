@@ -1,5 +1,6 @@
 import type { BinanceAPI } from "./binance-api"
 import { AccumulationEngine } from "./accumulation-strategies"
+import { BinanceFilters, type TradingRules } from "./binance-filters"
 
 interface AdvancedTradingConfig {
   symbol: string
@@ -15,6 +16,7 @@ export class AdvancedTradingEngine {
   private accumulator: AccumulationEngine
   private isActive = false
   private intervalId: NodeJS.Timeout | null = null
+  private tradingRules: TradingRules | null = null
 
   constructor(binance: BinanceAPI, config: AdvancedTradingConfig) {
     this.binance = binance
@@ -31,13 +33,23 @@ export class AdvancedTradingEngine {
     console.log("🚀 Starting Advanced Accumulation Engine...")
     this.isActive = true
 
-    this.intervalId = setInterval(async () => {
-      try {
-        await this.executeAccumulationStrategy()
-      } catch (error) {
-        console.error("❌ Accumulation strategy error:", error)
-      }
-    }, 10000) // Check every 10 seconds
+    try {
+      // Load trading rules first
+      await this.loadTradingRules()
+      console.log("📋 Trading rules loaded:", this.tradingRules)
+
+      this.intervalId = setInterval(async () => {
+        try {
+          await this.executeAccumulationStrategy()
+        } catch (error) {
+          console.error("❌ Accumulation strategy error:", error)
+        }
+      }, 10000) // Check every 10 seconds
+    } catch (error) {
+      console.error("Failed to start trading engine:", error)
+      this.isActive = false
+      throw error
+    }
   }
 
   stop() {
@@ -49,8 +61,26 @@ export class AdvancedTradingEngine {
     }
   }
 
+  private async loadTradingRules() {
+    try {
+      // Determine if we're using testnet based on the binance instance
+      const testnet = true // You might want to pass this from config
+      this.tradingRules = await BinanceFilters.getTradingRules(this.config.symbol, testnet)
+
+      console.log(`📊 ${this.config.symbol} Trading Rules:`, {
+        minQty: this.tradingRules.minQty,
+        stepSize: this.tradingRules.stepSize,
+        minNotional: this.tradingRules.minNotional,
+        precision: this.tradingRules.baseAssetPrecision,
+      })
+    } catch (error) {
+      console.error("Failed to load trading rules:", error)
+      throw new Error("Cannot start trading without exchange rules")
+    }
+  }
+
   private async executeAccumulationStrategy() {
-    if (!this.isActive) return
+    if (!this.isActive || !this.tradingRules) return
 
     try {
       // Get current market data
@@ -62,7 +92,7 @@ export class AdvancedTradingEngine {
       const decision = this.accumulator.getOptimalAction(currentPrice, xrpBalance.free, usdtBalance.free)
 
       console.log("📊 Market Analysis:", {
-        price: currentPrice,
+        price: currentPrice.toFixed(4),
         xrp: xrpBalance.free.toFixed(2),
         usdt: usdtBalance.free.toFixed(2),
         signals: decision.signals,
@@ -89,24 +119,94 @@ export class AdvancedTradingEngine {
   }
 
   private async executeAction(action: any, currentPrice: number) {
+    if (!this.tradingRules) {
+      console.error("❌ Cannot execute action: Trading rules not loaded")
+      return
+    }
+
     try {
-      if (action.type === "BUY" && action.amount > 10) {
-        const quantity = (action.amount / currentPrice) * 0.999 // Account for fees
+      if (action.type === "BUY" && action.amount > this.tradingRules.minNotional) {
+        // Calculate raw quantity
+        const rawQuantity = action.amount / currentPrice
 
-        console.log(`🟢 BUYING: ${quantity.toFixed(4)} XRP at $${currentPrice.toFixed(4)}`)
-        console.log(`💡 Reason: ${action.reason}`)
+        // Validate and adjust quantity
+        const validation = BinanceFilters.validateOrder(
+          this.config.symbol,
+          rawQuantity,
+          currentPrice,
+          this.tradingRules,
+        )
 
-        // Execute market buy order
-        await this.binance.marketOrder(this.config.symbol, "BUY", quantity)
-      } else if (action.type === "SELL" && action.amount > 0.1) {
-        console.log(`🔴 SELLING: ${action.amount.toFixed(4)} XRP at $${currentPrice.toFixed(4)}`)
-        console.log(`💡 Reason: ${action.reason}`)
+        if (!validation.valid) {
+          console.log(`⚠️ Order validation failed:`, validation.errors)
+          console.log(`💡 Suggestion: Increase order amount above $${this.tradingRules.minNotional}`)
+          return
+        }
 
-        // Execute market sell order
-        await this.binance.marketOrder(this.config.symbol, "SELL", action.amount)
+        const finalQuantity = validation.adjustedQuantity
+        const orderValue = finalQuantity * currentPrice
+
+        console.log(`🟢 BUYING XRP:`)
+        console.log(`   Quantity: ${finalQuantity.toFixed(this.tradingRules.baseAssetPrecision)} XRP`)
+        console.log(`   Price: $${currentPrice.toFixed(4)}`)
+        console.log(`   Value: $${orderValue.toFixed(2)}`)
+        console.log(`   Reason: ${action.reason}`)
+
+        // Execute market buy order with validated quantity
+        await this.binance.marketOrder(this.config.symbol, "BUY", finalQuantity)
+
+        console.log("✅ Buy order executed successfully")
+      } else if (action.type === "SELL" && action.amount > this.tradingRules.minQty) {
+        // For sell orders, action.amount is already in XRP quantity
+        const validation = BinanceFilters.validateOrder(
+          this.config.symbol,
+          action.amount,
+          currentPrice,
+          this.tradingRules,
+        )
+
+        if (!validation.valid) {
+          console.log(`⚠️ Sell order validation failed:`, validation.errors)
+          return
+        }
+
+        const finalQuantity = validation.adjustedQuantity
+        const orderValue = finalQuantity * currentPrice
+
+        console.log(`🔴 SELLING XRP:`)
+        console.log(`   Quantity: ${finalQuantity.toFixed(this.tradingRules.baseAssetPrecision)} XRP`)
+        console.log(`   Price: $${currentPrice.toFixed(4)}`)
+        console.log(`   Value: $${orderValue.toFixed(2)}`)
+        console.log(`   Reason: ${action.reason}`)
+
+        // Execute market sell order with validated quantity
+        await this.binance.marketOrder(this.config.symbol, "SELL", finalQuantity)
+
+        console.log("✅ Sell order executed successfully")
+      } else {
+        console.log(`⏭️ Skipping ${action.type} order: Amount too small`)
+        console.log(
+          `   Required: Min $${this.tradingRules.minNotional} for BUY, Min ${this.tradingRules.minQty} XRP for SELL`,
+        )
+        console.log(
+          `   Current: ${action.type === "BUY" ? `$${action.amount.toFixed(2)}` : `${action.amount.toFixed(6)} XRP`}`,
+        )
       }
-    } catch (error) {
-      console.error("Order execution error:", error)
+    } catch (error: any) {
+      console.error("❌ Order execution error:", error.message)
+
+      // Provide helpful error context
+      if (error.message.includes("LOT_SIZE")) {
+        console.log("💡 LOT_SIZE Error Help:")
+        console.log(`   Min Quantity: ${this.tradingRules.minQty}`)
+        console.log(`   Step Size: ${this.tradingRules.stepSize}`)
+        console.log(`   Precision: ${this.tradingRules.baseAssetPrecision} decimals`)
+      }
+
+      if (error.message.includes("MIN_NOTIONAL")) {
+        console.log("💡 MIN_NOTIONAL Error Help:")
+        console.log(`   Minimum order value: $${this.tradingRules.minNotional}`)
+      }
     }
   }
 
@@ -115,6 +215,7 @@ export class AdvancedTradingEngine {
       isActive: this.isActive,
       strategy: this.config.strategy,
       target: this.config.accumulationTarget,
+      tradingRules: this.tradingRules,
     }
   }
 }

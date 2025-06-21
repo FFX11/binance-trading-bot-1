@@ -177,36 +177,48 @@ export class AccumulationEngine {
 
     // STRONG BUY conditions (accumulate aggressively)
     if (signals.momentum === "OVERSOLD" && signals.pricePosition === "BELOW_SMA") {
-      action = {
-        type: "BUY",
-        amount: Math.min(usdtBalance * 0.3, this.config.baseAmount * 0.3),
-        reason: "Strong accumulation signal: Oversold + Below SMA",
-        confidence: 0.9,
+      const orderAmount = Math.min(usdtBalance * 0.2, this.config.baseAmount * 0.2)
+      // Ensure minimum order value of $15 (above typical MIN_NOTIONAL of $10)
+      if (orderAmount >= 15) {
+        action = {
+          type: "BUY",
+          amount: orderAmount,
+          reason: "Strong accumulation signal: Oversold + Below SMA",
+          confidence: 0.9,
+        }
       }
     }
     // MODERATE BUY conditions
     else if (signals.momentum === "OVERSOLD" || signals.pricePosition === "BELOW_SMA") {
-      action = {
-        type: "BUY",
-        amount: Math.min(usdtBalance * 0.15, this.config.baseAmount * 0.15),
-        reason: "Moderate accumulation signal",
-        confidence: 0.7,
+      const orderAmount = Math.min(usdtBalance * 0.1, this.config.baseAmount * 0.1)
+      if (orderAmount >= 15) {
+        action = {
+          type: "BUY",
+          amount: orderAmount,
+          reason: "Moderate accumulation signal",
+          confidence: 0.7,
+        }
       }
     }
     // DCA BUY (always accumulate small amounts)
-    else if (signals.trend === "BULLISH" && usdtBalance > 50) {
-      action = {
-        type: "BUY",
-        amount: Math.min(usdtBalance * 0.05, this.config.baseAmount * 0.05),
-        reason: "DCA accumulation in uptrend",
-        confidence: 0.5,
+    else if (signals.trend === "BULLISH" && usdtBalance > 20) {
+      const orderAmount = Math.min(usdtBalance * 0.05, this.config.baseAmount * 0.05)
+      if (orderAmount >= 15) {
+        action = {
+          type: "BUY",
+          amount: orderAmount,
+          reason: "DCA accumulation in uptrend",
+          confidence: 0.5,
+        }
       }
     }
     // SELL only if heavily overbought and we have significant XRP
-    else if (signals.momentum === "OVERBOUGHT" && signals.pricePosition === "ABOVE_SMA" && xrpBalance > 100) {
+    else if (signals.momentum === "OVERBOUGHT" && signals.pricePosition === "ABOVE_SMA" && xrpBalance > 10) {
+      // Ensure we're selling at least the minimum quantity
+      const sellAmount = Math.max(xrpBalance * 0.1, 1) // At least 1 XRP or 10% of holdings
       action = {
         type: "SELL",
-        amount: xrpBalance * 0.2, // Sell only 20% to take some profits
+        amount: sellAmount,
         reason: "Partial profit taking - heavily overbought",
         confidence: 0.6,
       }
