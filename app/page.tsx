@@ -16,6 +16,7 @@ import { AdvancedTradingEngine } from "@/lib/advanced-trading-engine"
 import { TradingDashboard } from "@/components/trading-dashboard"
 import { TradingMetrics } from "@/components/trading-metrics"
 import { ConnectionTester } from "@/components/connection-tester"
+import { TradingControls } from "@/components/trading-controls"
 
 interface ApiCredentials {
   apiKey: string
@@ -52,6 +53,13 @@ export default function XRPAccumulationBot() {
     currentPrice: 0,
     totalValue: 0,
     isActive: false,
+  })
+
+  const [marketData, setMarketData] = useState({
+    currentSignal: "HOLD",
+    signalStrength: 0,
+    rsi: 50,
+    trend: "NEUTRAL",
   })
 
   const [error, setError] = useState<string>("")
@@ -100,6 +108,14 @@ export default function XRPAccumulationBot() {
               totalValue: usdtBalance.free + xrpBalance.free * price,
               isActive: stats.isActive,
             })
+
+            // Update market data (simulated for demo)
+            setMarketData({
+              currentSignal: Math.random() > 0.7 ? "BUY" : Math.random() > 0.3 ? "HOLD" : "SELL",
+              signalStrength: Math.floor(Math.random() * 100),
+              rsi: 40 + Math.random() * 20,
+              trend: Math.random() > 0.5 ? "BULLISH" : "BEARISH",
+            })
           } catch (error) {
             console.error("Portfolio update error:", error)
           }
@@ -120,8 +136,10 @@ export default function XRPAccumulationBot() {
     try {
       if (portfolioData.isActive) {
         tradingEngine.stop()
+        console.log("🛑 Bot paused")
       } else {
         await tradingEngine.start()
+        console.log("🚀 Bot started")
       }
     } catch (error: any) {
       setError(`Accumulation error: ${error.message}`)
@@ -418,6 +436,15 @@ export default function XRPAccumulationBot() {
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
+
+        {/* PROMINENT TRADING CONTROLS - This is what you're looking for! */}
+        <TradingControls
+          isActive={portfolioData.isActive}
+          isConnected={isConnected}
+          onToggle={toggleAccumulation}
+          currentSignal={marketData.currentSignal}
+          signalStrength={marketData.signalStrength}
+        />
 
         {/* Main Dashboard */}
         <TradingMetrics
